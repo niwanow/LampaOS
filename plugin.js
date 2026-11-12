@@ -1,6 +1,7 @@
 /*
  * Витрина — главная с баннером и лентами для Lampa.
  * Один файл, ES5, без сборки. Данные: только TMDB через Lampa и локальная история Lampa.
+ * Трейлеры на баннере (настройка, можно выключить) проигрываются встроенным проигрывателем YouTube.
  */
 (function () {
   'use strict';
@@ -68,6 +69,8 @@
       skelCount: 5
     },
     radius: { card: 0.3, btn: 0.3, bar: 0.2 },
+    // карточка Lampa: её собственные отступы (em), от которых считаются наши
+    full: { scrollPad: 2.5, linePad: 1.5, fadeFrom: 23.4 },
     scale: { focus: 1.08, press: 0.97, pressCard: 1.03 },
     z: { hero: 0, shade: 1, heroBody: 2, rows: 3, cardFocus: 4, state: 6 },
     gradient: {
@@ -91,6 +94,8 @@
       errIn: 250,
       skelPulse: 1600,
       heroDelay: 350,
+      trailerDelay: 2500,   // сколько баннер должен простоять, прежде чем запустится трейлер
+      trailerWait: 12000,   // если за это время видео не пошло — отменяем
       ease: 'cubic-bezier(0.16, 1, 0.3, 1)',
       easeIn: 'cubic-bezier(0.4, 0, 1, 1)',
       easeSoft: 'ease-in-out'
@@ -110,11 +115,14 @@
     title: { ru: 'Витрина', en: 'Showcase' },
     watch: { ru: 'Смотреть', en: 'Watch' },
     details: { ru: 'Подробнее', en: 'Details' },
+    row_now: { ru: 'Сейчас смотрят', en: 'Watching now' },
     row_trend: { ru: 'Сегодня в тренде', en: 'Trending today' },
+    row_week: { ru: 'В тренде за неделю', en: 'Trending this week' },
+    row_upcoming: { ru: 'Смотрите в кинозалах', en: 'In theaters' },
     row_movies: { ru: 'Популярные фильмы', en: 'Popular movies' },
     row_series: { ru: 'Популярные сериалы', en: 'Popular series' },
-    row_new: { ru: 'Новинки', en: 'New releases' },
-    row_top: { ru: 'Лучшее по оценкам', en: 'Top rated' },
+    row_top_movie: { ru: 'Топ фильмы', en: 'Top movies' },
+    row_top_tv: { ru: 'Топ сериалы', en: 'Top series' },
     row_action: { ru: 'Боевики', en: 'Action' },
     row_comedy: { ru: 'Комедии', en: 'Comedy' },
     row_drama: { ru: 'Драмы', en: 'Drama' },
@@ -148,6 +156,16 @@
       ru: 'Название, год и жанры под каждым кадром. Если выключить, название пишется поверх кадра.',
       en: 'Title, year and genres under each card. When off, the title sits on the image.'
     },
+    set_trailer: { ru: 'Трейлер на баннере', en: 'Trailer on the banner' },
+    set_trailer_d: {
+      ru: 'Через пару секунд на баннере витрины и карточки без звука запускается официальный трейлер с YouTube.',
+      en: 'After a couple of seconds the official YouTube trailer plays muted on the showcase and title banners.'
+    },
+    set_card: { ru: 'Карточка в стиле витрины', en: 'Showcase-style title page' },
+    set_card_d: {
+      ru: 'Страница фильма или сериала выглядит как витрина: большой баннер и те же кнопки. Все кнопки и разделы Lampa остаются.',
+      en: 'The title page looks like the showcase: a large banner and the same buttons. All Lampa buttons and sections stay.'
+    },
     set_cont: { ru: 'Продолжить просмотр', en: 'Continue watching' },
     set_cont_d: {
       ru: 'Лента недосмотренных фильмов и сериалов из истории Lampa.',
@@ -163,12 +181,39 @@
   }
 
   /* ------------------------------------------------------------------ состав рядов (только TMDB) */
+  function pad2(n) {
+    return (n < 10 ? '0' : '') + n;
+  }
+
+  function dayString(time) {
+    var d = new Date(time);
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  }
+
+  // «Сейчас смотрят» — тот же выбор, что на стандартной главной Lampa: с настройкой Lampa «только релизы»
+  // берём фильмы, вышедшие в цифре, на дисках или на ТВ за последние 90 дней, иначе — идущие в прокате.
+  function nowWatchingUrl() {
+    var released = false;
+    try {
+      released = !!Lampa.Storage.field('tmdb_only_released');
+    } catch (e) {}
+    if (!released) return 'movie/now_playing';
+    var now = Date.now();
+    return 'discover/movie?with_release_type=4|5|6&release_date.lte=' + dayString(now) +
+      '&release_date.gte=' + dayString(now - 90 * 24 * 60 * 60 * 1000) + '&sort_by=popularity.desc';
+  }
+
+  // Первые восемь лент повторяют стандартную главную Lampa (источник TMDB): те же запросы и те же названия
+  // (lang — ключ перевода Lampa, title — наш запасной текст). Баннер берётся из первой ленты.
   var ROWS = [
-    { id: 'trend', title: 'row_trend', url: 'trending/all/day' },
-    { id: 'movies', title: 'row_movies', url: 'movie/popular', type: 'movie' },
-    { id: 'series', title: 'row_series', url: 'tv/popular', type: 'tv' },
-    { id: 'new', title: 'row_new', url: 'movie/now_playing', type: 'movie' },
-    { id: 'top', title: 'row_top', url: 'movie/top_rated', type: 'movie' },
+    { id: 'now', title: 'row_now', lang: 'title_now_watch', url: nowWatchingUrl, type: 'movie' },
+    { id: 'trend', title: 'row_trend', lang: 'title_trend_day', url: 'trending/movie/day', type: 'movie' },
+    { id: 'week', title: 'row_week', lang: 'title_trend_week', url: 'trending/movie/week', type: 'movie' },
+    { id: 'upcoming', title: 'row_upcoming', lang: 'title_upcoming', url: 'movie/upcoming', type: 'movie' },
+    { id: 'movies', title: 'row_movies', lang: 'title_popular_movie', url: 'movie/popular', type: 'movie' },
+    { id: 'series', title: 'row_series', lang: 'title_popular_tv', url: 'trending/tv/week', type: 'tv' },
+    { id: 'top_movie', title: 'row_top_movie', lang: 'title_top_movie', url: 'movie/top_rated', type: 'movie' },
+    { id: 'top_tv', title: 'row_top_tv', lang: 'title_top_tv', url: 'tv/top_rated', type: 'tv' },
     { id: 'action', title: 'row_action', url: 'discover/movie?with_genres=28&sort_by=popularity.desc', type: 'movie' },
     { id: 'comedy', title: 'row_comedy', url: 'discover/movie?with_genres=35&sort_by=popularity.desc', type: 'movie' },
     { id: 'drama', title: 'row_drama', url: 'discover/movie?with_genres=18&sort_by=popularity.desc', type: 'movie' },
@@ -281,9 +326,195 @@
     return item.year || genres;
   }
 
+  /* ------------------------------------------------------------------ трейлеры (YouTube — по решению пользователя) */
+  // Домен без cookie; в адрес попадает только ключ ролика из TMDB, ничего об устройстве и истории.
+  var YT_HOST = 'https://www.youtube-nocookie.com';
+
+  function tmdbLang() {
+    var lang = '';
+    try {
+      lang = Lampa.Storage.field('tmdb_lang') || Lampa.Storage.get('language', 'ru');
+    } catch (e) {}
+    lang = (lang + '').toLowerCase().slice(0, 2);
+    return /^[a-z]{2}$/.test(lang) ? lang : 'en';
+  }
+
+  // Из списка видео TMDB берём ролик YouTube: сначала трейлер, потом тизер; при равенстве — на языке
+  // пользователя и с пометкой «официальный».
+  function pickTrailer(list, lang) {
+    var best = '';
+    var bestScore = 0;
+    if (!list || !list.length) return '';
+    for (var i = 0; i < list.length; i++) {
+      var v = list[i];
+      if (!v || v.site !== 'YouTube' || !/^[A-Za-z0-9_\-]{6,20}$/.test(v.key + '')) continue;
+      var score = v.type === 'Trailer' ? 100 : (v.type === 'Teaser' ? 10 : 0);
+      if (!score) continue;
+      if (v.iso_639_1 === lang) score += 20;
+      if (v.official) score += 5;
+      if (score > bestScore) {
+        bestScore = score;
+        best = v.key + '';
+      }
+    }
+    return best;
+  }
+
+  // Ключ трейлера запоминается в самой карточке: '' — трейлера нет.
+  function findTrailer(item, done) {
+    if (typeof item.trailer === 'string') {
+      done(item.trailer);
+      return;
+    }
+    if (!/^\d+$/.test(item.id + '') || (item.type !== 'movie' && item.type !== 'tv')) {
+      done('');
+      return;
+    }
+    var lang = tmdbLang();
+    var method = item.type + '/' + item.id + '/videos?include_video_language=' + (lang === 'en' ? 'en' : lang + ',en');
+    try {
+      Lampa.Api.sources.tmdb.get(method, {}, function (json) {
+        item.trailer = pickTrailer(json && json.results, lang);
+        done(item.trailer);
+      }, function () {
+        done('');
+      });
+    } catch (e) {
+      done('');
+    }
+  }
+
+  // Проигрыватель трейлера: один встроенный кадр YouTube без звука. Когда запускать и останавливать, решают снаружи.
+  // cls — класс обёртки (cls + '--on' показывает видео), mount(box) ставит обёртку в нужное место страницы.
+  function makeTrailer(cls, mount) {
+    var cur = null;   // { box, frame, playing, wait, ping, done }
+
+    function drop(box) {
+      if (box.parentNode) box.parentNode.removeChild(box);
+    }
+
+    function tell(message) {
+      if (!cur || !cur.frame.contentWindow) return;
+      try {
+        cur.frame.contentWindow.postMessage(JSON.stringify(message), YT_HOST);
+      } catch (e) {}
+    }
+
+    function ping() {
+      tell({ event: 'listening', id: 1, channel: 'widget' });
+      tell({ event: 'command', func: 'addEventListener', args: ['onStateChange'], id: 1, channel: 'widget' });
+      tell({ event: 'command', func: 'addEventListener', args: ['onError'], id: 1, channel: 'widget' });
+    }
+
+    function stop(fade) {
+      if (!cur) return;
+      var box = cur.box;
+      var shown = cur.playing;
+      clearTimeout(cur.wait);
+      clearInterval(cur.ping);
+      window.removeEventListener('message', onMessage);
+      cur = null;
+      if (fade && shown) {
+        box.className = cls;
+        setTimeout(function () {
+          drop(box);
+        }, NFX.motion.heroFade + 60);
+      } else {
+        drop(box);
+      }
+    }
+
+    function finish() {
+      var done = cur.done;
+      stop(true);
+      if (done) done();
+    }
+
+    // Проигрыватель сообщает о состоянии; из сообщения читаем только число состояния.
+    function onMessage(e) {
+      if (!cur || e.origin !== YT_HOST || e.source !== cur.frame.contentWindow) return;
+      var data = null;
+      try {
+        data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+      } catch (err) {
+        return;
+      }
+      if (!data || typeof data !== 'object') return;
+      if (cur.ping) {
+        clearInterval(cur.ping);
+        cur.ping = 0;
+        // на случай, если автозапуск не сработал сам
+        tell({ event: 'command', func: 'mute', args: [], id: 1, channel: 'widget' });
+        tell({ event: 'command', func: 'playVideo', args: [], id: 1, channel: 'widget' });
+      }
+      var state = null;
+      if (data.event === 'onStateChange' && typeof data.info === 'number') state = data.info;
+      else if (data.event === 'infoDelivery' && data.info && typeof data.info.playerState === 'number') state = data.info.playerState;
+      if (data.event === 'onError' || state === 0) {
+        finish();   // ошибка или ролик доигран
+      } else if (state === 1 && !cur.playing) {
+        // показываем видео только когда оно действительно пошло
+        cur.playing = true;
+        clearTimeout(cur.wait);
+        cur.box.className = cls + ' ' + cls + '--on';
+      }
+    }
+
+    // done вызывается один раз, если ролик доигран, дал ошибку или не запустился за отведённое время.
+    function play(key, done) {
+      stop(false);
+      var box = el(cls);
+      var frame = document.createElement('iframe');
+      var loc = window.location;
+      var origin = /^https?:$/.test(loc.protocol) ? loc.protocol + '//' + loc.host : '';
+      frame.className = 'nfx-video__frame';
+      frame.setAttribute('allow', 'autoplay; encrypted-media');
+      frame.setAttribute('frameborder', '0');
+      frame.setAttribute('scrolling', 'no');
+      frame.setAttribute('tabindex', '-1');
+      frame.setAttribute('aria-hidden', 'true');
+      frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+      var mine = { box: box, frame: frame, playing: false, wait: 0, ping: 0, done: done };
+      cur = mine;
+      frame.onload = function () {
+        if (cur !== mine || mine.ping) return;
+        ping();
+        mine.ping = setInterval(ping, 500);
+      };
+      window.addEventListener('message', onMessage);
+      mine.wait = setTimeout(function () {
+        if (cur === mine && !mine.playing) finish();
+      }, NFX.motion.trailerWait);
+      frame.src = YT_HOST + '/embed/' + key + '?autoplay=1&mute=1&controls=0&disablekb=1&fs=0&rel=0&iv_load_policy=3' +
+        '&modestbranding=1&playsinline=1&enablejsapi=1' + (origin ? '&origin=' + encodeURIComponent(origin) : '');
+      box.appendChild(frame);
+      mount(box);
+    }
+
+    return {
+      play: play,
+      stop: stop,
+      active: function () {
+        return !!cur;
+      }
+    };
+  }
+
+  // Название ленты: перевод Lampa, если он есть (совпадает со стандартной главной на любом языке), иначе свой текст.
+  function rowTitle(def) {
+    if (def.lang) {
+      try {
+        var text = Lampa.Lang.translate(def.lang);
+        if (text && text !== def.lang) return text + '';
+      } catch (e) {}
+    }
+    return T(def.title);
+  }
+
   function request(def, ok, fail) {
     try {
-      Lampa.Api.sources.tmdb.get(def.url, {}, function (json) {
+      var url = typeof def.url === 'function' ? def.url() : def.url;
+      Lampa.Api.sources.tmdb.get(url, {}, function (json) {
         var list = json && json.results && json.results.length ? json.results : [];
         var out = [];
         var seen = {};
@@ -426,6 +657,7 @@
     var z = NFX.z;
     var r = NFX.radius;
     var sp = NFX.space;
+    var k = NFX.full;
     var rowH = s.rowHeadH + s.cardH + s.capH;
     var rowHNoCap = s.rowHeadH + s.cardH;
     var fill = 'position:absolute;left:0;top:0;width:100%;height:100%;';
@@ -433,6 +665,31 @@
     return [
       /* единственные правила для элементов самой Lampa — только пока открыт наш экран */
       'body.nfx--active .wrap__content{padding-top:0}',
+      // Карточка Lampa в стиле витрины: все правила действуют только внутри экрана, помеченного классом nfx-full.
+      '.nfx-full{background:' + c.bg + '}',
+      '.nfx-full .full-start__background{left:0;top:0;width:100%;max-width:100%;height:' + s.heroH + 'em;opacity:1;-webkit-mask-image:none;mask-image:none;object-fit:cover;object-position:50% 20%;animation:none}',
+      '.nfx-full .activity__body:after{content:"";position:absolute;left:0;top:0;width:100%;height:' + s.heroH + 'em;z-index:-1;background:' + g.top + ',' + g.left + '}',
+      '.nfx-full__video{position:absolute;left:0;top:' + round(s.heroH / 2) + 'em;width:100%;height:0;padding-top:56.25%;margin-top:-28.125%;z-index:-1;opacity:0;background:#000;pointer-events:none;transition:opacity ' + m.heroFade + 'ms ease-out}',
+      '.nfx-full__video--on{opacity:1}',
+      '.nfx-full .scroll--mask{-webkit-mask-image:none;mask-image:none}',
+      // «лист» с содержимым: сверху прозрачный, к низу баннера становится сплошным и при прокрутке закрывает кадр
+      '.nfx-full .activity__body>div>.scroll>.scroll__content>.scroll__body{background:linear-gradient(to bottom, rgba(20,20,20,0) ' + round(k.fadeFrom - k.scrollPad) + 'em, ' + c.bg + ' ' + round(s.heroH - k.scrollPad) + 'em)}',
+      '.nfx-full .full-start-new{padding:0 ' + s.sidePad + 'em ' + round(s.heroBottom - s.heroOverlap) + 'em}',
+      '.nfx-full .full-start-new__body{height:' + round(s.heroH - s.heroBottom - k.scrollPad) + 'em}',
+      '.nfx-full .full-start-new__left{display:none}',
+      '.nfx-full .full-start-new__right{width:auto;max-width:52em}',
+      '.nfx-full .full-start-new__head{font-size:1em;margin-bottom:' + sp.u + 'em;color:' + c.textDim + '}',
+      '.nfx-full .full-start-new__title{font-size:' + f.heroTitle + 'em;line-height:1.1;font-weight:900;margin-bottom:' + round(sp.s2 / f.heroTitle) + 'em;-webkit-line-clamp:2;color:#fff}',
+      '.nfx-full .full-start-new__tagline{font-size:' + f.heroDesc + 'em;margin-bottom:' + round(sp.s2 / f.heroDesc) + 'em;color:' + c.text + '}',
+      '.nfx-full .full-start-new__rate-line{margin-bottom:' + sp.s2 + 'em}',
+      '.nfx-full .full-start-new__details{font-size:1em;margin-bottom:' + sp.s2 + 'em;min-height:0;color:' + c.text + '}',
+      '.nfx-full .full-start-new__reactions{margin-bottom:' + sp.s3 + 'em;min-height:0}',
+      '.nfx-full .full-start-new__buttons .full-start__button{font-size:' + f.button + 'em;height:' + round(s.btnH / f.button) + 'em;padding:0 ' + round(s.btnPadX / f.button) + 'em;margin-right:' + round(s.btnGap / f.button) + 'em;border-radius:' + round(r.btn / f.button) + 'em;background:' + c.btn + ';color:#fff;font-weight:700;transition:transform ' + m.focus + 'ms ' + m.ease + '}',
+      '.nfx-full .full-start-new__buttons .full-start__button.focus{background:' + c.focus + ';color:' + c.bg + ';transform:scale(' + NFX.scale.focus + ')}',
+      '.nfx-full .items-line__head{padding-left:' + s.sidePad + 'em;padding-right:' + s.sidePad + 'em}',
+      '.nfx-full .items-line__title{font-size:' + f.rowTitle + 'em;font-weight:700;color:' + c.text + '}',
+      '.nfx-full .full-descr{padding-left:' + s.sidePad + 'em;padding-right:' + s.sidePad + 'em}',
+      '.nfx-full .items-line__body>.scroll>.scroll__content>.scroll__body{padding-left:' + round(s.sidePad - k.linePad) + 'em;padding-right:' + round(s.sidePad - k.linePad) + 'em}',
       'body.nfx--active .head{background:' + g.head + '}',
 
       '.nfx-screen{position:absolute;left:0;top:0;width:100%;height:100vh;overflow:hidden;background:' + c.bg + ';color:' + c.text + ';font-family:' + f.family + '}',
@@ -441,6 +698,10 @@
       /* баннер */
       '.nfx-hero{position:absolute;left:0;top:0;width:100%;height:' + s.heroH + 'em;overflow:hidden;background:' + c.bg + '}',
       '.nfx-hero__img{' + fill + 'z-index:' + z.hero + ';opacity:0;background-size:cover;background-position:50% 20%;background-repeat:no-repeat;transition:opacity ' + m.heroFade + 'ms ease-out}',
+      // Видео 16:9 во всю ширину баннера, по вертикали по центру: верх и низ (подписи проигрывателя) обрезаются.
+      '.nfx-hero__video{position:absolute;left:0;top:50%;width:100%;height:0;padding-top:56.25%;margin-top:-28.125%;z-index:' + z.shade + ';opacity:0;background:#000;pointer-events:none;transition:opacity ' + m.heroFade + 'ms ease-out}',
+      '.nfx-hero__video--on{opacity:1}',
+      '.nfx-video__frame{position:absolute;left:0;top:0;width:100%;height:100%;border:0;pointer-events:none}',
       '.nfx-hero__shade{' + fill + 'z-index:' + z.shade + ';background:' + g.top + ',' + g.bottom + ',' + g.left + '}',
       '.nfx-hero__body{position:absolute;left:' + s.sidePad + 'em;bottom:' + s.heroBottom + 'em;width:' + s.heroTextW + 'em;z-index:' + z.heroBody + ';transition:opacity ' + m.heroTextIn + 'ms ' + m.ease + '}',
       '.nfx-hero__body--out{opacity:0;transition:opacity ' + m.heroTextOut + 'ms ' + m.easeIn + '}',
@@ -561,11 +822,18 @@
     var activeRowEl = null;
     var isFast = false;
     var lastKey = 0;
-    var timers = { hero: 0, heroText: 0, heroFade: 0 };
+    var timers = { hero: 0, heroText: 0, heroFade: 0, trailer: 0 };
     var view = { font: 22.81, w: 84.2, h: 47.35 };
 
     var captions = flag('nfx_captions', true);
     var useContinue = flag('nfx_continue', true);
+    var useTrailer = flag('nfx_trailer', true);
+    var trailer = makeTrailer('nfx-hero__video', function (box) {
+      if (hero) hero.el.insertBefore(box, hero.shade);
+    });
+    var trailerItem = null;    // карточка, чей трейлер сейчас в проигрывателе
+    var trailerFor = null;     // карточка, для которой трейлер запланирован или ищется
+    var trailerSkip = null;    // карточка, чей трейлер уже доигран или не запустился: не повторяем, пока баннер не сменится
     var contSig = '';
     var contDirty = true;      // историю перечитываем только после возврата с другого экрана
     var started = false;       // экран сейчас показан (между start и pause/stop)
@@ -728,7 +996,7 @@
       var row = {
         def: def,
         kind: kind,
-        title: T(def.title),
+        title: rowTitle(def),
         state: 'idle',
         items: [],
         col: 0,
@@ -914,7 +1182,8 @@
         body: el('nfx-hero__body'),
         title: el('nfx-hero__title'),
         desc: el('nfx-hero__desc'),
-        btns: [makeButton(ICON.play, T('watch')), makeButton(ICON.info, T('details'))]
+        btns: [makeButton(ICON.play, T('watch')), makeButton(ICON.info, T('details'))],
+        shade: el('nfx-hero__shade')
       };
       var btns = el('nfx-hero__btns');
       btns.appendChild(hero.btns[0]);
@@ -924,7 +1193,7 @@
       hero.body.appendChild(btns);
       hero.el.appendChild(hero.layers[0]);
       hero.el.appendChild(hero.layers[1]);
-      hero.el.appendChild(el('nfx-hero__shade'));
+      hero.el.appendChild(hero.shade);
       hero.el.appendChild(hero.body);
       pageEl.insertBefore(hero.el, pageEl.firstChild);
       heroTop = 0;
@@ -975,6 +1244,7 @@
       if (!hero || !item) return;
       heroItem = item;
       var token = ++heroToken;
+      syncTrailer();
 
       clearTimeout(timers.heroText);
       if (instant) {
@@ -1022,6 +1292,45 @@
       timers.hero = setTimeout(function () {
         if (!destroyed) setHero(item, false);
       }, NFX.motion.heroDelay);
+    }
+
+    /* ---------- трейлер на баннере ---------- */
+    function heroInView() {
+      return zone === 'hero' || (zone === 'rows' && rowIndex === 0);
+    }
+
+    function stopTrailer(fade) {
+      clearTimeout(timers.trailer);
+      trailerFor = null;
+      trailerItem = null;
+      trailer.stop(fade && !destroyed);
+    }
+
+    // Трейлер идёт, только пока баннер на экране и не меняется; любое расхождение — остановка.
+    function syncTrailer() {
+      var want = useTrailer && started && !destroyed && hero && heroItem && heroInView() ? heroItem : null;
+      if (want && want === trailerSkip) want = null;
+      if (trailerItem ? trailerItem === want : trailerFor === want) return;
+      stopTrailer(true);
+      if (!want) return;
+      trailerFor = want;
+      timers.trailer = setTimeout(function () {
+        if (destroyed || trailerFor !== want) return;
+        findTrailer(want, function (key) {
+          if (destroyed || trailerFor !== want || trailerItem || !hero) return;
+          trailerFor = null;
+          if (!key) {
+            trailerSkip = want;
+            return;
+          }
+          trailerItem = want;
+          trailer.play(key, function () {
+            // ролик доигран или не запустился: для этой карточки больше не пробуем, пока баннер не сменится
+            trailerSkip = want;
+            trailerItem = null;
+          });
+        });
+      }, NFX.motion.trailerDelay);
     }
 
     /* ---------- слой состояния ---------- */
@@ -1122,10 +1431,13 @@
       applyScroll();
       applyFocus();
       scheduleHero();
+      syncTrailer();
     }
 
     /* ---------- сборка и загрузка ---------- */
     function reset() {
+      stopTrailer(false);
+      trailerSkip = null;
       clearTimeout(timers.hero);
       clearTimeout(timers.heroText);
       finishFade();
@@ -1204,6 +1516,7 @@
 
     // Настройки и история могли измениться, пока экран был не в фокусе.
     function applySettings() {
+      useTrailer = flag('nfx_trailer', true);
       if (!rows.length) return;
       var changed = false;
       var cap = flag('nfx_captions', true);
@@ -1378,6 +1691,7 @@
     function releaseBody() {
       var current = Lampa.Activity.active();
       if (current && current.component === COMPONENT && current.activity !== self.activity) return;
+      if (current && current.component === 'full' && card.slide) return;   // сейчас открыта карточка в нашем оформлении
       document.body.classList.remove('nfx--active');
     }
 
@@ -1408,6 +1722,7 @@
       active = false;
       started = false;
       clearTimeout(timers.hero);
+      stopTrailer(false);
       releaseBody();
     };
 
@@ -1470,6 +1785,8 @@
     var params = [
       { name: 'nfx_as_home', def: false, title: 'set_home', desc: 'set_home_d' },
       { name: 'nfx_captions', def: true, title: 'set_cap', desc: 'set_cap_d' },
+      { name: 'nfx_card', def: true, title: 'set_card', desc: 'set_card_d' },
+      { name: 'nfx_trailer', def: true, title: 'set_trailer', desc: 'set_trailer_d' },
       { name: 'nfx_continue', def: true, title: 'set_cont', desc: 'set_cont_d' }
     ];
     for (var i = 0; i < params.length; i++) {
@@ -1506,12 +1823,114 @@
     swapHome();
   }
 
+  /* ------------------------------------------------------------------ карточка Lampa в стиле витрины */
+  // Сама карточка остаётся карточкой Lampa (все её кнопки и разделы, включая добавленные другими плагинами):
+  // мы только помечаем её экран классом nfx-full, под которым действуют наши стили, и ставим трейлер на фон.
+  var card = { slide: null, item: null, player: null, watch: 0, wait: 0, pending: false, skip: false };
+
+  function slideOf(object) {
+    var node = null;
+    try {
+      node = object.activity.render(true);
+    } catch (e) {}
+    return node && node.classList ? node : null;
+  }
+
+  function cardStopTrailer() {
+    clearTimeout(card.wait);
+    card.pending = false;
+    if (card.player) card.player.stop(true);
+  }
+
+  function cardHeroVisible() {
+    var start = card.slide.querySelector('.full-start-new');
+    if (!start) return false;
+    var rect = start.getBoundingClientRect();
+    return rect.height > 0 && rect.top > -rect.height / 2;
+  }
+
+  // Раз в секунду сверяем, можно ли показывать трейлер: карточка на экране, баннер не прокручен, плеер не открыт.
+  function cardTick() {
+    var slide = card.slide;
+    if (!slide) return;
+    var ok = !card.skip && flag('nfx_trailer', true) && document.body.contains(slide) &&
+      slide.classList.contains('activity--active') && !document.querySelector('.player') && cardHeroVisible();
+    if (!ok) {
+      cardStopTrailer();
+      return;
+    }
+    if (card.pending || card.player.active()) return;
+    var item = card.item;
+    card.pending = true;
+    card.wait = setTimeout(function () {
+      findTrailer(item, function (key) {
+        if (card.slide !== slide || card.item !== item || !card.pending) return;
+        card.pending = false;
+        if (!key) {
+          card.skip = true;
+          return;
+        }
+        card.player.play(key, function () {
+          card.skip = true;   // доигран или не запустился — второй раз на этой карточке не пускаем
+        });
+      });
+    }, NFX.motion.trailerDelay);
+  }
+
+  function undressCard() {
+    clearInterval(card.watch);
+    cardStopTrailer();
+    card.slide = null;
+    card.item = null;
+    card.player = null;
+  }
+
+  function dressCard(object) {
+    var slide = slideOf(object);
+    if (!slide) return;
+    if (card.slide !== slide) {
+      undressCard();
+      var source = object.source || 'tmdb';
+      card.slide = slide;
+      card.item = { id: object.id, type: object.method === 'tv' ? 'tv' : 'movie' };
+      // трейлер ищем по номеру TMDB; у карточек из других источников номера свои
+      card.skip = source !== 'tmdb' && source !== 'cub';
+      card.player = makeTrailer('nfx-full__video', function (box) {
+        (slide.querySelector('.activity__body') || slide).appendChild(box);
+      });
+    }
+    slide.classList.add('nfx-full');
+    document.body.classList.add('nfx--active');
+    clearInterval(card.watch);
+    card.watch = setInterval(cardTick, 1000);
+  }
+
+  function watchCard() {
+    Lampa.Listener.follow('activity', function (e) {
+      if (e.type === 'start') {
+        if (e.component === 'full' && flag('nfx_card', true)) {
+          dressCard(e.object);
+          return;
+        }
+        undressCard();
+        if (e.component === 'full') {
+          var slide = slideOf(e.object);
+          if (slide) slide.classList.remove('nfx-full');
+        }
+        if (e.component !== COMPONENT) document.body.classList.remove('nfx--active');
+      } else if (e.type === 'destroy' && card.slide && e.object && slideOf(e.object) === card.slide) {
+        undressCard();
+      }
+    });
+  }
+
   function init() {
     injectStyle();
     Lampa.Component.add(COMPONENT, Home);
     addMenu();
     addSettings();
     watchHome();
+    watchCard();
   }
 
   if (window.appready) init();
